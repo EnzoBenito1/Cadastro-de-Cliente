@@ -1,3 +1,4 @@
+# .github/workflows/ci.yml
 name: CI Pipeline
 
 on:
@@ -48,22 +49,22 @@ jobs:
       uses: docker/setup-buildx-action@v3
     
     - name: Build Docker Image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: false
-        tags: cadastro-clientes:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      run: |
+        docker build -t cadastro-clientes:latest .
+        docker images
     
     - name: Testar Docker Image
       run: |
         docker run -d -p 3000:3000 --name test-container cadastro-clientes:latest
-        sleep 10
-        docker ps
+        sleep 15
+        echo "Container status:"
+        docker ps -a
+        echo "Container logs:"
         docker logs test-container
-        curl --retry 5 --retry-delay 2 http://localhost:3000/api/clientes || true
-        docker stop test-container
+        echo "Testing API:"
+        curl --retry 10 --retry-delay 3 --retry-connrefused http://localhost:3000/api/clientes || echo "API test failed but continuing"
+        docker stop test-container || true
+        docker rm test-container || true
 
   lint:
     name: Verificar Qualidade
