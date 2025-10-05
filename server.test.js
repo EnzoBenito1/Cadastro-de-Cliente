@@ -126,8 +126,9 @@ describe('API de Clientes', () => {
         .expect(200);
 
       expect(response.body.clientes).toHaveLength(2);
-      expect(response.body.clientes[0].nome).toBe('Maria Santos');
-      expect(response.body.clientes[1].nome).toBe('João Silva');
+      // Ordem DESC (mais recente primeiro)
+      expect(response.body.clientes[0].nome).toBe('João Silva');
+      expect(response.body.clientes[1].nome).toBe('Maria Santos');
     });
   });
 
