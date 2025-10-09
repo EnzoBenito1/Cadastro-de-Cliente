@@ -1,11 +1,13 @@
-# .github/workflows/ci.yml
-name: CI Pipeline
+name: CI/CD Pipeline com Docker Hub
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/cadastro-clientes
 
 jobs:
   test:
@@ -36,10 +38,11 @@ jobs:
       run: npm test -- --coverage --coverageReporters=text
       continue-on-error: true
 
-  build:
-    name: Build Docker Image (Local)
+  build-and-push:
+    name: Build e Push para Docker Hub
     runs-on: ubuntu-latest
     needs: test
+    if: github.event_name == 'push'
     
     steps:
     - name: Checkout código
@@ -48,21 +51,81 @@ jobs:
     - name: Configurar Docker Buildx
       uses: docker/setup-buildx-action@v3
     
-    - name: Build Docker Image
-      run: |
-        docker build -t cadastro-clientes:latest .
-        docker images
+    - name: Login no Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_TOKEN }}
     
-    - name: Testar Docker Image
+    - name: Extrair metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.DOCKER_IMAGE }}
+        tags: |
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build e Push da imagem
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Resumo da publicação
       run: |
-        docker run -d -p 3000:3000 --name test-container cadastro-clientes:latest
+        echo "### ✅ Imagem publicada com sucesso! 🐳" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Imagens criadas:**" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Para usar:**" >> $GITHUB_STEP_SUMMARY
+        echo '```bash' >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
+        echo "docker run -d -p 3000:3000 ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+  test-published-image:
+    name: Testar imagem publicada
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: Login no Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_TOKEN }}
+    
+    - name: Pull da imagem
+      run: docker pull ${{ env.DOCKER_IMAGE }}:latest
+    
+    - name: Executar container
+      run: |
+        docker run -d -p 3000:3000 --name test-container ${{ env.DOCKER_IMAGE }}:latest
         sleep 15
-        echo "Container status:"
-        docker ps -a
-        echo "Container logs:"
-        docker logs test-container
-        echo "Testing API:"
-        curl --retry 10 --retry-delay 3 --retry-connrefused http://localhost:3000/api/clientes || echo "API test failed but continuing"
+    
+    - name: Testar API
+      run: |
+        echo "Testando API..."
+        curl --retry 10 --retry-delay 3 --retry-connrefused http://localhost:3000/api/clientes
+        echo "✅ API respondendo!"
+    
+    - name: Ver logs
+      if: always()
+      run: docker logs test-container
+    
+    - name: Cleanup
+      if: always()
+      run: |
         docker stop test-container || true
         docker rm test-container || true
 
@@ -95,15 +158,22 @@ jobs:
         test -f public/index.html && echo "✅ index.html existe"
 
   summary:
-    name: Resumo da Build
+    name: Resumo da Pipeline
     runs-on: ubuntu-latest
-    needs: [test, build, lint]
+    needs: [test, build-and-push, test-published-image, lint]
     if: always()
     
     steps:
     - name: Resultado Final
       run: |
-        echo "🎉 Pipeline executado com sucesso!"
-        echo "✅ Testes: ${{ needs.test.result }}"
-        echo "✅ Build: ${{ needs.build.result }}"
-        echo "✅ Lint: ${{ needs.lint.result }}"
+        echo "## 🎉 Pipeline Completa!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Testes | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Build & Push | ${{ needs.build-and-push.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Test Image | ${{ needs.test-published-image.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Imagem disponível em:" >> $GITHUB_STEP_SUMMARY
+        echo "https://hub.docker.com/r/${{ secrets.DOCKER_USERNAME }}/cadastro-clientes" >> $GITHUB_STEP_SUMMARY
